@@ -1,0 +1,67 @@
+#!/usr/bin/perl
+
+use Device::SerialPort;
+use Getopt::Std;
+
+getopts("dt:l:h:");
+
+# d debug mode
+# t timeout period
+# h high threshold
+# l low threshold 
+
+my $timeout = $opt_t || 10;
+my $minTemp = $opt_l || -99;
+my $maxTemp = $opt_h || 99;
+
+my @serialports = @ARGV;
+my @failed;
+my $detail;
+
+print "testing @serialports\n" if $opt_d;
+
+foreach my $portname (@serialports){
+  my $timer = $timeout;
+  $port = Device::SerialPort->new($portname)||die "Couldn't open port $!\n";
+  $port->user_msg(ON);
+  $port->baudrate(4800);
+  $port->databits(8);
+  $port->parity("none");
+  $port->stopbits(1);
+  $port->handshake("none");
+  $port->read_char_time(0);
+  $port->read_const_time(1000);
+  die "Couldn't open port $!\n" unless $port->write_settings;
+  my $code = "\x24\x10\x05\x01\x01\x00\x32\x01\x55";
+  my $count_out = $port->write($code);
+  while ($timer > 0){
+    # Read enough characters from port to guarantee a complete reading
+    my ($count,$saw) = $port->read(10);
+    if($count > 0){
+      if ($saw=~m/\x24\xfe\x02(\C\C)\x55/){
+        my $raw =  unpack('n*',$1);
+		$raw -= 1<<16 if $raw & 1 << 15;
+		my $temp = ($raw * 0.007812);
+		if ($temp > $minTemp && $temp < $maxTemp){
+		  print "temperature OK\n" if $opt_d;
+		  $detail .= "$portname in range: $temp\n";
+	    }else{
+		  push @failed,$portname;
+		  $detail .= "$portname out of range: $temp\n";
+		  print "temperature bad\n" if $opt_d;
+		}
+	    print "$temp\n" if $opt_d;
+	    last;
+	  }
+	}
+	else{
+	  $timer--;
+	}
+  }
+  $code = "\x24\x11\x00\x55";
+  $port->write($code);
+}
+print join (" ", @failed), "\n";
+print $detail;
+
+@failed == 0 ? exit 0 : exit 1;
